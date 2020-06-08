@@ -1,0 +1,15 @@
+LICENSE.txt
+MANIFEST.in
+README.rst
+pyitachip2ir.py
+setup.cfg
+setup.py
+pyitachip2ir.egg-info/PKG-INFO
+pyitachip2ir.egg-info/SOURCES.txt
+pyitachip2ir.egg-info/dependency_links.txt
+pyitachip2ir.egg-info/top_level.txt
+source/IRCommand.h
+source/IRCommandParser.cpp
+source/IRCommandParser.h
+source/ITachIP2IR.cpp
+source/ITachIP2IR.h
