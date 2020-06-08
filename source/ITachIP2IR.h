@@ -28,9 +28,9 @@ protected:
 	int parseResponse(char *message);
 	bool parseBroadcast(char *message,std::string &mac,std::string &ip);
 	int tryResponse(int timeout);
-	void tryPing();
+	bool tryPing();
 	void tryBeacon();
-	void tryConnect();
+	bool tryConnect();
 	bool checkConnect(int timeout);
 	static std::string commandToGC(int modaddr,int connaddr,const IRCommand *command,int count);
 

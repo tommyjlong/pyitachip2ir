@@ -19,6 +19,7 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/ioctl.h>
+#include <sys/errno.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
@@ -27,7 +28,7 @@
 
 #define ITACH_BROADCAST_ADDRESS "239.255.250.250"
 #define ITACH_BROADCAST_PORT 9131
-#define POLL_READ_TIME 500
+#define POLL_READ_TIME 500  /* ms */
 
 using namespace std;
 
@@ -60,8 +61,11 @@ ITachIP2IR::ITachIP2IR(const string& mac,const string& ip,int port):
     WSAStartup(0x202, &wsaData);
 #endif
 
-	tryBeacon();
-	tryConnect();
+        logf("ITachIP2IR: Let's try noBeacon and noConnect");
+	/* tryBeacon();*/
+	/* tryConnect(); */
+	close(connectingSocket);
+        connectingSocket = -1;
 }
 
 ITachIP2IR::~ITachIP2IR(){
@@ -70,9 +74,6 @@ ITachIP2IR::~ITachIP2IR(){
 	}
 	if(connectingSocket!=-1){
 		close(connectingSocket);
-	}
-	if(dataSocket!=-1){
-		close(dataSocket);
 	}
 
 #ifdef _WIN32
@@ -84,11 +85,13 @@ bool ITachIP2IR::addDevice(const string& name,int modaddr,int connaddr,char *tex
 	Device device;
 	bool result = IRCommandParser::parseIRCommands(device.commands, text);
 	if(!result){
+	        logf("addDevice: failed");
 		return false;
 	}
 	device.modaddr=modaddr;
 	device.connaddr=connaddr;
 	devices[name]=device;
+	logf("addDevice: suceeded");
 	return true;
 }
 
@@ -96,6 +99,7 @@ string name;
 bool command_name(const IRCommand& command){return command.getName() == name;}
 
 bool ITachIP2IR::send(const string& device,const string& command,int count){
+	logf("itachSend device:%s  command:%s ",device.c_str(),command.c_str());
 	map<string,Device>::iterator dit=devices.find(device);
 	if(dit==devices.end()){
 		logf("Unknown device:%s",device.c_str());
@@ -113,31 +117,50 @@ bool ITachIP2IR::send(const string& device,const string& command,int count){
 }
 
 bool ITachIP2IR::send(int modaddr,int connaddr,const IRCommand *command,int count){
-	checkConnect(0);
+        bool retbool;
+	logf("Attempting to CommandSocketSend. connectingSocket currently is %i",connectingSocket);
 
-	tryResponse(0);
+	/* checkConnect(0); */
+	/* tryResponse(0); */
+
+        retbool=tryConnect();
+        if (retbool == false){
+	    close(connectingSocket);
+            connectingSocket = -1;
+            return false;
+        }
 
 	string data=commandToGC(modaddr,connaddr,command,count);
 
-	int amount=::send(dataSocket,data.c_str(),data.length(),0);
-	if(amount==(int)data.length() && tryResponse(POLL_READ_TIME)>=0){
+	int amount=::send(connectingSocket,data.c_str(),data.length(),0); 
+	logf("CommandSocketSent over socket %i of len: %i",connectingSocket, amount);
+
+	if(amount==(int)data.length() ){ 
+                tryResponse(POLL_READ_TIME);
+	        close(connectingSocket);
+                connectingSocket = -1;
 		return true;
 	}
 	else{
-		if(dataSocket!=-1){
-			close(dataSocket);
-			dataSocket=-1;
-		}
-
-		tryConnect();
-
+                if(amount == -1){
+	            logf("CommandSocketSent failed - errno: %i",errno);
+                }
+                else{
+	            logf("CommandSocketSent amount of data not expected. Socket %i of len: %i",connectingSocket, amount);
+                }
+	        close(connectingSocket);
+                connectingSocket = -1;
 		return false;
 	}
+        
 }
 
 void ITachIP2IR::update(){
 	fd_set fd;
 	timeval tv={0};
+
+	logf("Perform no Update");
+        return;
 
 	FD_ZERO(&fd);
 	if(beaconSocket!=-1) FD_SET(beaconSocket,&fd);
@@ -149,7 +172,7 @@ void ITachIP2IR::update(){
 			string mac,ip;
 			parseBroadcast(response,mac,ip);
 			if(mac==macAddress){
-				if(dataSocket==-1){
+				if(connectingSocket==-1){
 					ipAddress=ip;
 					tryConnect();
 				}
@@ -162,43 +185,55 @@ void ITachIP2IR::update(){
 	
 	checkConnect(0);
 
-	if(dataSocket!=-1){
+	if(connectingSocket!=-1){
 		tryResponse(0);
 	}
 
-	if(dataSocket==-1 && beaconSocket==-1){
+	if(connectingSocket==-1 && beaconSocket==-1){
 		tryBeacon();
 	}
 }
 
 int ITachIP2IR::tryResponse(int timeout){
+        int selectval;
 	fd_set fd;
 	timeval tv;
 	tv.tv_sec=timeout/1000;
 	tv.tv_usec=(timeout%1000)*1000;
 
 	FD_ZERO(&fd);
-	if(dataSocket!=-1) FD_SET(dataSocket,&fd);
-	if(dataSocket!=-1 && select(dataSocket+1,&fd,NULL,NULL,&tv)>0){
-		logf("Socket has notification");
+	if(connectingSocket!=-1) FD_SET(connectingSocket,&fd);
+
+	logf("tryResponse Setup - timeout sec:%i usec:%i",tv.tv_sec, tv.tv_usec);
+        selectval = select(connectingSocket+1,&fd,NULL,NULL,&tv);
+	logf("Select Rx results - timeleft sec:%i usec:%i  selectval: %i",tv.tv_sec, tv.tv_usec, selectval);
+
+	/* if(connectingSocket!=-1 && select(connectingSocket+1,&fd,NULL,NULL,&tv)>0){ */
+	if(connectingSocket!=-1 && selectval>0){
+		logf("Select has FD notification - assume rx");
 
 		char response[1024];
 		memset(response,0,1024);
-		int amount=recv(dataSocket,response,1023,0);
+		int amount=recv(connectingSocket,response,1023,0);
 		if(amount>0){
-			logf("Socket has data");
-
+			logf("Socket Rx has data - size: %i",amount);
 			return parseResponse(response);
 		}
 		else if(amount<0){
-			logf("Socket is invalid");
-
-			close(dataSocket);
-			dataSocket=-1;
+	                logf("Socket Rx - failed errno: %i",errno);
+			/* close(connectingSocket); */
+			/* connectingSocket=-1; */
 			return -1;
 		}
 	}
-	return 0;
+        if(selectval == 0){
+	  logf("Socket Select Rx - timeout");
+	  return 0;
+        }
+        else{
+	  logf("Socket Select Rx - failed errno: %i",errno);
+	  return -1;
+        }
 }
 
 int ITachIP2IR::parseResponse(char *message){
@@ -254,7 +289,7 @@ void ITachIP2IR::tryBeacon(){
 	}
 }
 
-void ITachIP2IR::tryConnect(){
+bool ITachIP2IR::tryConnect(){
 	logf("tryConnect:%s:%d",ipAddress.c_str(),port);
 
 	if(connectingSocket!=-1){
@@ -263,8 +298,15 @@ void ITachIP2IR::tryConnect(){
 	}
 
 	if(ipAddress.length()>0){
-		connectingSocket=socket(PF_INET,SOCK_STREAM,IPPROTO_TCP);
 
+		connectingSocket=socket(AF_INET,SOCK_STREAM,IPPROTO_TCP);
+	        logf("OpenSocketfd: %i",connectingSocket);
+
+                if (connectingSocket < 0){
+	                logf("Opening Socket failed errno: %i",errno);
+                        return false;
+     
+                }
 		unsigned long value=1;
 		ioctl(connectingSocket,FIONBIO,&value);
 
@@ -272,14 +314,32 @@ void ITachIP2IR::tryConnect(){
 		address.sin_family=AF_INET;
 		address.sin_addr.s_addr=inet_addr(ipAddress.c_str());
 		address.sin_port=htons(port);
-		connect(connectingSocket,(struct sockaddr*)&address,sizeof(address));
-
+		unsigned int retcode;
+		retcode=connect(connectingSocket,(struct sockaddr*)&address,sizeof(address));
+                if (retcode < 0){
+	                logf("Socket connect failed errno: %i",errno);
+                        return false;
+                }
 		value=0;
 		ioctl(connectingSocket,FIONBIO,&value);
 	}
+        else{
+	        logf("tryConnect - IP address too short");
+                return false;
+        }
+        return true;
 }
 
 bool ITachIP2IR::checkConnect(int timeout){
+        bool retbool;
+        /* retbool=tryConnect();
+           close(connectingSocket);
+           connectingSocket = -1;
+        */
+        retbool=tryPing();
+        return retbool;
+/*
+   Comment out the rest
 	fd_set fd;
 	timeval tv;
 	tv.tv_sec=timeout/1000;
@@ -288,21 +348,41 @@ bool ITachIP2IR::checkConnect(int timeout){
 	FD_ZERO(&fd);
 	if(connectingSocket!=-1) FD_SET(connectingSocket,&fd);
 	if(connectingSocket!=-1 && select(connectingSocket+1,NULL,&fd,NULL,&tv)>0){
-		logf("checkConnect: connected");
+		logf("checkConnect: connected. Socket: %i",connectingSocket);
 		dataSocket=connectingSocket;
 		connectingSocket=-1;
 	}
 
 	return dataSocket!=-1;
+*/
 }
 
-void ITachIP2IR::tryPing(){
+bool ITachIP2IR::tryPing(){
 	logf("tryPing:%s:%d",ipAddress.c_str(),port);
+	logf("Attempting tryPingSocketSend. connectingSocket currently is %i",connectingSocket);
+
+	tryConnect();
 
 	string string="getversion\r";
-	int amount=::send(dataSocket,string.c_str(),string.length(),0);
-	if(amount<0 || tryResponse(POLL_READ_TIME)<0){
-		tryConnect();
+	int amount=::send(connectingSocket,string.c_str(),string.length(),0);
+	logf("PingSocketSent over socket %i of len: %i",connectingSocket, amount);
+
+	if(amount==(int)string.length() ){ 
+                tryResponse(POLL_READ_TIME);
+	        close(connectingSocket);
+                connectingSocket = -1;
+		return true;
+	}
+	else{
+                if(amount == -1){
+	            logf("PingSent failed - errno: %i",errno);
+                }
+                else{
+	            logf("PingSent amount of data not expected. Socket %i of len: %i",connectingSocket, amount);
+                }
+	        close(connectingSocket);
+                connectingSocket = -1;
+		return false;
 	}
 }
 
@@ -379,8 +459,10 @@ void* PyInit_itachip2ir(){return NULL;}
 #include "IRCommandParser.h"
 
 int main(int argc, char **argv) {
+	logf("Main: Entrance");
 	if (argc < 8) {
 		printf("%s [ip] [port] [file] [command] [mod] [conn] [count]\n", argv[0]);
+	        logf("Main: Not enough args");
 		return 1;
 	}
 
@@ -390,8 +472,12 @@ int main(int argc, char **argv) {
 	ITachIP2IR itach("",argv[1],atoi(argv[2]));
 	if(!itach.ready(5000)){
 		printf("Failed to connect\n");
+		logf("Main: Connect - Failed");
 		return -1;
 	}
+        else {
+		logf("Main: Connect - Success");
+        }
 
 	itach.addDevice("device",atoi(argv[5]),atoi(argv[6]),(char*)str.c_str());
 	itach.send("device",argv[4],atoi(argv[7]));
