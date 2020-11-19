@@ -11,20 +11,23 @@ However, when using the Home Assistant supplied pyitachip2ir libary on my Ubuntu
 
 How to use this with Home Assistant
 ----------
-First of all, the target for this is for use with HA in a Python environment.
+First of all, the target for this is for use with **HA in a Python environment**.
 Home Assistant stores a shared library version of pyitachchip2ir in python's ``site-packages`` directory, so you'll need to have access to that directory.
 
-* Download/Clone this repository, and cd to the source directory ``cd ../source`` , then execute the following: 
+* Download/Clone this repository, and cd to the source directory ``cd ../source``. For an Ubuntu based system execute the following command: 
 
   ``g++ -shared -fPIC IRCommandParser.cpp ITachIP2IR.cpp -o itachip2ir.so``
 
-  This produces a shared library file ``itachipir.so`` that we will use.
+  This produces a shared library file ``itachipir.so`` that we will use.<br/>
+
+  If your system runs on a 64bit AMD/Intel CPU, you should be able to use the itachipir.so file already in the repository.  To know what architecture/CPU you system runs on, execute the command `uname -m` and if it shows `x86_64` then you should be able to use the already supplied itachipir.so file.
 * cd into the ``../site-packages/`` directory used by Home Assistant.
 * Look for a file something like ``itachip2ir.blahblah.so`` (in my case its is ``itachip2ir.cpython-37m-x86_64-linux-gnu.so``).  Either delete the file, or simply change the ``.so`` extension to something like ``.sow`` (when HA's Python code starts up it looks for a file named (wildcard)itachip2ir(wildcard) with extension .so).
-* Copy the ``itachip2ir.so`` that was generated earlier to the ``../site-packages/`` directory. 
+* Copy the ``itachip2ir.so`` that was discussed earlier to the ``../site-packages/`` directory. 
 * Reboot/Restart HA. 
 
 Be aware that if the itachip2ir library in PyPi changes, HA may in turn bring in an updated itachip2ir.blahblah.so file on the next HA upgrade, so reapplying this same fix may or may not work.
+
 
 License
 -------
